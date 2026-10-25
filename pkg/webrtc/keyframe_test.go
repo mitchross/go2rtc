@@ -1,6 +1,11 @@
 package webrtc
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/pion/rtcp"
+	"github.com/stretchr/testify/require"
+)
 
 func TestIsH264KeyframeRTP(t *testing.T) {
 	tests := []struct {
@@ -23,5 +28,25 @@ func TestIsH264KeyframeRTP(t *testing.T) {
 		if got := isH264KeyframeRTP(tt.payload); got != tt.want {
 			t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
 		}
+	}
+}
+
+func TestKeyframeRequestSendsPLIAndFreshFIR(t *testing.T) {
+	next := keyframeRequest(1234)
+
+	for seq := uint8(1); seq <= 2; seq++ {
+		pkts := next()
+		require.Len(t, pkts, 2)
+
+		pli, ok := pkts[0].(*rtcp.PictureLossIndication)
+		require.True(t, ok)
+		require.Equal(t, uint32(1234), pli.MediaSSRC)
+
+		fir, ok := pkts[1].(*rtcp.FullIntraRequest)
+		require.True(t, ok)
+		require.Equal(t, []rtcp.FIREntry{{SSRC: 1234, SequenceNumber: seq}}, fir.FIR)
+
+		_, err := rtcp.Marshal(pkts)
+		require.NoError(t, err)
 	}
 }

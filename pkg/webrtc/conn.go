@@ -120,14 +120,14 @@ func NewConn(pc *webrtc.PeerConnection) *Conn {
 		if requestKeyframes {
 			interval := c.KeyframeInterval
 			go func() {
-				pkts := []rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: uint32(remote.SSRC())}}
+				nextRequest := keyframeRequest(uint32(remote.SSRC()))
 				ticker := time.NewTicker(time.Second * 2)
 				defer ticker.Stop()
 				for range ticker.C {
 					if time.Since(time.Unix(0, lastKeyframe.Load())) < interval {
 						continue
 					}
-					if err := pc.WriteRTCP(pkts); err != nil {
+					if err := pc.WriteRTCP(nextRequest()); err != nil {
 						return
 					}
 				}
@@ -264,6 +264,18 @@ func sanitizeIP6(host string) string {
 		return "[" + host + "]"
 	}
 	return host
+}
+
+// keyframeRequest returns PLI plus FIR packets for each request. Google ignores
+// bare PLI on some Nest cameras but honors FIR (#2365); a FIR that repeats its
+// sequence number is treated as a duplicate (RFC 5104).
+func keyframeRequest(ssrc uint32) func() []rtcp.Packet {
+	pli := &rtcp.PictureLossIndication{MediaSSRC: ssrc}
+	fir := &rtcp.FullIntraRequest{MediaSSRC: ssrc, FIR: []rtcp.FIREntry{{SSRC: ssrc}}}
+	return func() []rtcp.Packet {
+		fir.FIR[0].SequenceNumber++
+		return []rtcp.Packet{pli, fir}
+	}
 }
 
 // isH264KeyframeRTP reports whether an H264 RTP payload starts a keyframe:
