@@ -73,6 +73,9 @@ func Dial(rawURL string) (core.Producer, error) {
 // Media inactivity watchdog: Google can stop sending RTP while the
 // PeerConnection never reaches `failed` (observed: 27 minutes of dead stream
 // with IgnoreDisconnected set). Close the conn so go2rtc re-dials.
+//
+// Watch video bytes, not total bytes: Google can freeze the video track while
+// the Opus audio track keeps flowing, which kept the stream "alive" forever.
 const (
 	inactivityCheck   = 5 * time.Second
 	inactivityTimeout = 30 * time.Second
@@ -106,13 +109,13 @@ func (c *WebRTCClient) watchdog(stop <-chan struct{}) {
 	ticker := time.NewTicker(inactivityCheck)
 	defer ticker.Stop()
 
-	lastRecv := c.conn.Recv
+	lastRecv := c.videoRecv()
 	lastChange := time.Now()
 
 	for {
 		select {
 		case <-ticker.C:
-			if recv := c.conn.Recv; recv != lastRecv {
+			if recv := c.videoRecv(); recv != lastRecv {
 				lastRecv = recv
 				lastChange = time.Now()
 				continue
@@ -125,6 +128,27 @@ func (c *WebRTCClient) watchdog(stop <-chan struct{}) {
 			return
 		}
 	}
+}
+
+// videoRecv returns bytes received on video tracks. If the stream has no
+// video receiver yet, it falls back to total bytes so audio-only streams
+// still count as active.
+func (c *WebRTCClient) videoRecv() int {
+	return videoBytes(c.conn.Receivers, c.conn.Recv)
+}
+
+func videoBytes(receivers []*core.Receiver, total int) int {
+	n, found := 0, false
+	for _, r := range receivers {
+		if r.Codec != nil && r.Codec.IsVideo() {
+			n += r.Bytes
+			found = true
+		}
+	}
+	if !found {
+		return total
+	}
+	return n
 }
 
 func (c *WebRTCClient) Stop() error {
